@@ -47,6 +47,7 @@ class MqttHelper:
     SCAN_INTERVAL: ClassVar[float] = 0.02
 
     subscribe_feature_types: ClassVar[List[FeatureType]] = [
+        FeatureType.DI,
         FeatureType.DO,
         FeatureType.RO,
     ]
@@ -62,8 +63,9 @@ class MqttHelper:
         FeatureType.RO,
     ]
     publish_serial_feature_types: ClassVar[List[FeatureType]] = [
-        # FeatureType.DI,
-        # FeatureType.RO,
+        FeatureType.DI,
+        FeatureType.DO,
+        FeatureType.RO,
         FeatureType.METER,
     ]
 
@@ -156,30 +158,34 @@ class MqttHelper:
 
     async def subscribe(self, client: MqttClient) -> None:
         """Subscribe feature topics to MQTT."""
+        
+        topics = set([f"{slugify(unit.config.device_info.name)}/#" for unit in self.unipi.unipi_boards])
+        topics_with_qos = [(topic, 0) for topic in topics]
         async with client.messages() as messages:
-            await client.subscribe(f"{slugify(self.config.device_info.name)}/#")
+            await client.subscribe(topics_with_qos)
 
             async for message in messages:
-                for feature in self.unipi.features.by_feature_types(self.subscribe_feature_types):
-                    topic: str = f"{feature.topic}/set"
+                for unit in self.unipi.unipi_boards:
+                    for feature in unit.features.by_feature_types(self.subscribe_feature_types):
+                        topic: str = f"{feature.topic}/set"
 
-                    if message.topic.matches(topic) and (payload := message.payload) and isinstance(payload, bytes):
-                        value: str = payload.decode()
+                        if message.topic.matches(topic) and (payload := message.payload) and isinstance(payload, bytes):
+                            value: str = payload.decode()
+                            print(f"SUB: {message.topic} : {value}")
+                            if isinstance(feature, (DigitalOutput, Relay)):
+                                if value == "ON":
+                                    await feature.set_state(True)
+                                elif value == "OFF":
+                                    await feature.set_state(False)
 
-                        if isinstance(feature, (DigitalOutput, Relay)):
-                            if value == "ON":
-                                await feature.set_state(True)
-                            elif value == "OFF":
-                                await feature.set_state(False)
-
-                            if (
-                                value in {"ON", "OFF"}
-                                and LOG_LEVEL[self.unipi.config.logging.mqtt.features_level] <= LOG_LEVEL["info"]
-                            ):
-                                UNIPI_LOGGER.log(
-                                    level=LOG_LEVEL["info"],
-                                    msg=LOG_MQTT_SUBSCRIBE % (topic, value),
-                                )
+                                if (
+                                    value in {"ON", "OFF"}
+                                    and LOG_LEVEL[self.unipi.config.logging.mqtt.features_level] <= LOG_LEVEL["info"]
+                                ):
+                                    UNIPI_LOGGER.log(
+                                        level=LOG_LEVEL["info"],
+                                        msg=LOG_MQTT_SUBSCRIBE % (topic, value),
+                                    )
 
         await asyncio.sleep(self.SCAN_INTERVAL)
 
@@ -193,34 +199,36 @@ class MqttHelper:
         """Publish feature changes to MQTT."""
         while self.PUBLISH_RUNNING:
             await scan_callback()
+            for unit in self.unipi.unipi_boards:
+                for feature in unit.features.by_feature_types(feature_types):
+                    if feature.changed:
+                        topic: str = f"{feature.topic}/get"
+                        print(f"PUB: {topic} : {feature.payload}")
+                        await client.publish(topic=topic, payload=feature.payload, qos=1, retain=True)
 
-            for feature in self.unipi.features.by_feature_types(feature_types):
-                if feature.changed:
-                    topic: str = f"{feature.topic}/get"
-                    await client.publish(topic=topic, payload=feature.payload, qos=1, retain=True)
-
-                    if (
-                        isinstance(feature, Eastron)
-                        and LOG_LEVEL[self.unipi.config.logging.mqtt.meters_level] <= LOG_LEVEL["info"]
-                    ) or (
-                        isinstance(feature, (DigitalInput, DigitalOutput, Led, Relay))
-                        and LOG_LEVEL[self.unipi.config.logging.mqtt.features_level] <= LOG_LEVEL["info"]
-                    ):
-                        UNIPI_LOGGER.log(
-                            level=LOG_LEVEL["info"],
-                            msg=LOG_MQTT_PUBLISH % (topic, feature.payload),
-                        )
+                        if (
+                            isinstance(feature, Eastron)
+                            and LOG_LEVEL[self.unipi.config.logging.mqtt.meters_level] <= LOG_LEVEL["info"]
+                        ) or (
+                            isinstance(feature, (DigitalInput, DigitalOutput, Led, Relay))
+                            and LOG_LEVEL[self.unipi.config.logging.mqtt.features_level] <= LOG_LEVEL["info"]
+                        ):
+                            UNIPI_LOGGER.log(
+                                level=LOG_LEVEL["info"],
+                                msg=LOG_MQTT_PUBLISH % (topic, feature.payload),
+                            )
 
             await asyncio.sleep(scan_interval)
 
     async def discovery(self, client: MqttClient) -> None:
         """Publish MQTT Home Assistant discovery topics."""
-        for feature in self.unipi.features.by_feature_types(self.publish_feature_types):
-            if isinstance(feature, DigitalInput):
-                await HassBinarySensorsDiscovery(unipi=self.unipi, client=client).publish(feature)
-            elif isinstance(feature, Eastron):
-                await HassSensorsDiscovery(unipi=self.unipi, client=client).publish(feature)
-            elif isinstance(feature, (DigitalOutput, Relay)):
-                await HassSwitchesDiscovery(unipi=self.unipi, client=client).publish(feature)
+        for unit in self.unipi.unipi_boards:
+            for feature in unit.features.by_feature_types(self.publish_feature_types):
+                if isinstance(feature, DigitalInput):
+                    await HassBinarySensorsDiscovery(unipi_board=unit, client=client).publish(feature)
+                elif isinstance(feature, Eastron):
+                    await HassSensorsDiscovery(unipi_board=unit, client=client).publish(feature)
+                elif isinstance(feature, (DigitalOutput, Relay)):
+                    await HassSwitchesDiscovery(unipi_board=unit, client=client).publish(feature)
 
-        await HassCoversDiscovery(covers=self.covers, unipi=self.unipi, client=client).publish()
+            await HassCoversDiscovery(covers=self.covers, unipi_board=unit, client=client).publish()

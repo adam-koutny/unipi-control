@@ -13,7 +13,6 @@ from typing import Union
 from pymodbus.client import AsyncModbusSerialClient
 from pymodbus.client import AsyncModbusTcpClient
 from pymodbus.exceptions import ModbusException
-from pymodbus.pdu import ModbusResponse
 
 from unipi_control.config import LogPrefix
 from unipi_control.config import UNIPI_LOGGER
@@ -85,7 +84,7 @@ class ModbusHelper:
                     "slave": modbus_register_block.get("unit", definition.unit),
                 }
 
-                response: Optional[ModbusResponse] = await check_modbus_call(self.client.tcp.read_input_registers, data)
+                response = await check_modbus_call(self.client.tcp.read_input_registers, data)
 
                 if response:
                     register: List[int] = response.registers
@@ -108,10 +107,10 @@ class ModbusHelper:
 
     async def scan_serial(self) -> None:
         """Scan Modbus RTU and add response to the cache."""
-        start_time_1: float = time()
+        # start_time_1: float = time()
 
         for definition in self.hardware.get_definition_by_hardware_types([HardwareType.EXTENSION]):
-            start_time_2: float = time()
+            # start_time_2: float = time()
 
             if not self.client.serial.connected:
                 await self.connect_serial(reconnect=True)
@@ -126,7 +125,7 @@ class ModbusHelper:
                     "slave": modbus_register_block.get("unit", definition.unit),
                 }
 
-                response: Optional[ModbusResponse] = await check_modbus_call(
+                response = await check_modbus_call(
                     self.client.serial.read_input_registers, data
                 )
 
@@ -134,21 +133,20 @@ class ModbusHelper:
                     register: List[int] = response.registers
                     for index in range(data["count"]):
                         self.data[definition.unit][data["address"] + index] = register[index]
-
             await asyncio.sleep(self.modubus_rtu_sleep * 2)
 
-            UNIPI_LOGGER.debug(
-                "%s [RTU] Unit %s scan duration: %s",
-                LogPrefix.MODBUS,
-                definition.unit,
-                round(time() - start_time_2, 4),
-            )
+            # UNIPI_LOGGER.debug(
+            #     "%s [RTU] Unit %s scan duration: %s",
+            #     LogPrefix.MODBUS,
+            #     definition.unit,
+            #     round(time() - start_time_2, 4),
+            # )
 
-        UNIPI_LOGGER.debug(
-            "%s [RTU] Full scan duration: %s",
-            LogPrefix.MODBUS,
-            round(time() - start_time_1, 4),
-        )
+        # UNIPI_LOGGER.debug(
+        #     "%s [RTU] Full scan duration: %s",
+        #     LogPrefix.MODBUS,
+        #     round(time() - start_time_1, 4),
+        #)
 
     def get_register(self, address: int, index: int, unit: int) -> List[int]:
         """Get the responses from the cached modbus register blocks.
@@ -185,7 +183,7 @@ class ModbusHelper:
 
 async def check_modbus_call(
     callback: Callable[..., Any], data: Union[ModbusReadData, ModbusWriteData]
-) -> Optional[ModbusResponse]:
+):
     """Check modbus read/write call has errors and log the errors.
 
     Parameters
@@ -205,7 +203,7 @@ async def check_modbus_call(
     ModbusException
         Write modbus exception to error log.
     """
-    response: Optional[ModbusResponse] = None
+    response = None
 
     try:
         response = await callback(**data)

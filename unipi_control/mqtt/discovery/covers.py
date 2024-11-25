@@ -14,7 +14,7 @@ from unipi_control.helpers.log import LOG_MQTT_PUBLISH
 from unipi_control.helpers.text import slugify
 from unipi_control.integrations.covers import Cover
 from unipi_control.integrations.covers import CoverMap
-from unipi_control.hardware.unipi import Unipi
+from unipi_control.hardware.unipi_board import UnipiBoard
 from unipi_control.config import UNIPI_LOGGER
 
 if TYPE_CHECKING:
@@ -24,12 +24,11 @@ if TYPE_CHECKING:
 class HassCoversDiscovery:
     """Provide the covers as Home Assistant MQTT discovery."""
 
-    def __init__(self, covers: CoverMap, unipi: Unipi, client: Client) -> None:
+    def __init__(self, covers: CoverMap, unipi_board: UnipiBoard, client: Client) -> None:
         self.mqtt_client: Client = client
         self.covers: CoverMap = covers
-
-        self.config: Config = unipi.config
-        self.hardware: HardwareMap = unipi.hardware
+        self.config: Config = unipi_board.config
+        self.hardware: HardwareMap = unipi_board.definition
 
     def get_discovery(self, cover: Cover) -> Tuple[str, Dict[str, Any]]:
         """Get MQTT topic and message for publish with MQTT.
@@ -62,7 +61,7 @@ class HassCoversDiscovery:
             "device": {
                 "name": device_name,
                 "identifiers": slugify(device_name),
-                "model": f"{self.hardware.info.name} {self.hardware.info.model}",
+                "model": f"{self.hardware.device_name} {self.hardware.model}",
                 "manufacturer": self.config.device_info.manufacturer,
             },
         }

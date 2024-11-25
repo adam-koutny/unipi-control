@@ -231,6 +231,7 @@ class CoverConfig(ConfigLoaderMixin):
     tilt_change_time: float = field(default_factory=float)
     cover_up: str = field(default_factory=str)
     cover_down: str = field(default_factory=str)
+    unit: str = field(default_factory=str) # add validation unit exists?
 
     def __post_init__(self) -> None:
         self.cover_run_time = float(self.cover_run_time)

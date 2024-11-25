@@ -6,7 +6,7 @@ from aiomqtt import Client
 
 from unipi_control.features.eastron import Eastron
 from unipi_control.features.unipi import UnipiFeature
-from unipi_control.hardware.unipi import Unipi
+from unipi_control.hardware.unipi_board import UnipiBoard
 
 if TYPE_CHECKING:
     from unipi_control.config import Config
@@ -14,12 +14,12 @@ if TYPE_CHECKING:
 
 
 class HassDiscoveryMixin:
-    def __init__(self, unipi: Unipi, client: Client) -> None:
-        self.config: Config = unipi.config
-        self.unipi = unipi
+    def __init__(self, unipi_board: UnipiBoard, client: Client) -> None:
+        self.config: Config = unipi_board.config
+        self.unipi_board = unipi_board
         self.client: Client = client
 
-        self.hardware: HardwareMap = unipi.hardware
+        #self.hardware: HardwareMap = unipi_board.hardware
 
     @staticmethod
     def _get_device_model(feature: Union[UnipiFeature, Eastron]) -> str:

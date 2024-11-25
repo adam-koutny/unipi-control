@@ -4,8 +4,6 @@ from typing import List
 from typing import Optional
 from typing import TYPE_CHECKING
 
-from pymodbus.pdu import ModbusResponse
-
 from unipi_control.config import Config
 from unipi_control.hardware.map import HardwareMap
 from unipi_control.hardware.constants import HardwareType
@@ -18,6 +16,9 @@ from unipi_control.features.map import FeatureMap
 from unipi_control.modbus.helpers import ModbusClient
 from unipi_control.modbus.helpers import check_modbus_call
 from unipi_control.modbus.helpers import ModbusHelper
+from unipi_control.hardware.extension import Extension
+
+from copy import deepcopy
 
 if TYPE_CHECKING:
     from unipi_control.modbus.helpers import ModbusReadData
@@ -62,11 +63,11 @@ class Unipi:
 
         await self.read_boards()
         await self.read_extensions()
-
-        UNIPI_LOGGER.info("%s %s features initialized.", LogPrefix.CONFIG, len(self.features))
+        for unit in self.unipi_boards:
+            UNIPI_LOGGER.info("%s %s features initialized for board %s.", LogPrefix.CONFIG, len(unit.features), unit.config.device_info.name)
 
     @staticmethod
-    def get_firmware(response: ModbusResponse) -> str:
+    def get_firmware(response) -> str:
         """Get the Unipi PLC firmware version.
 
         Parameters
@@ -95,7 +96,7 @@ class Unipi:
                 "slave": index,
             }
 
-            response: Optional[ModbusResponse] = await check_modbus_call(
+            response = await check_modbus_call(
                 self.modbus_client.tcp.read_input_registers, data
             )
 
@@ -131,12 +132,46 @@ class Unipi:
                 await self.modbus_helper.connect_serial()
 
             UNIPI_LOGGER.info(
-                "%s [RTU] Found device with unit %s (manufacturer: %s, model: %s)",
+                "%s [RTU] Found device with unit %s (manufacturer: %s, model: %s, device_name: %s)",
                 LogPrefix.MODBUS,
                 definition.unit,
                 definition.manufacturer,
                 definition.model,
+                definition.device_name
             )
+
+            if (definition.manufacturer and definition.manufacturer.lower() == "unipi") and (
+                definition.model and definition.model == "xS11"
+            ):
+                
+                data: ModbusReadData = {
+                    "address": 1000,
+                    "count": 1,
+                    "slave": definition.unit,
+                }
+                                
+                response = await check_modbus_call(
+                    self.modbus_client.serial.read_input_registers, data
+                    )
+                
+                firmware: str = self.get_firmware(response)
+                UNIPI_LOGGER.debug("%s Firmware version on board %s is %s", LogPrefix.MODBUS, definition.device_name, firmware)
+               
+                extension = Extension(
+                    config=self.config,
+                    modbus_client=self.modbus_client,
+                    definition=self.hardware[HardwareType.EXTENSION+"_"+str(definition.unit)],
+                    modbus_helper=self.modbus_helper,
+                    features=FeatureMap(),
+                    board_config=UnipiBoardConfig(
+                        firmware=firmware,
+                        major_group=1,
+                    ),
+                )
+                extension.config = deepcopy(extension.config)
+                extension.config.device_info.name = definition.device_name
+                extension.parse_features()
+                self.unipi_boards.append(extension)
 
             if (definition.manufacturer and definition.manufacturer.lower() == "eastron") and (
                 definition.model and definition.model == "SDM120M"

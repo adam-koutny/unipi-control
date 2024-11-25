@@ -6,14 +6,13 @@ from typing import Callable
 from typing import Optional
 from typing import Union
 
-from pymodbus.pdu import ModbusResponse
-
 from unipi_control.config import Config
 from unipi_control.config import FeatureConfig
 from unipi_control.features.constants import FeatureState
 from unipi_control.features.constants import FeatureType
 from unipi_control.helpers.text import slugify
 from unipi_control.hardware.map import HardwareDefinition
+from unipi_control.hardware.constants import HardwareType
 from unipi_control.modbus.helpers import ModbusWriteData
 from unipi_control.modbus.helpers import check_modbus_call
 from unipi_control.modbus.helpers import ModbusHelper
@@ -54,7 +53,7 @@ class UnipiFeature:
             None if modbus.val_coil is None else modbus.val_coil + self.hardware.feature_index
         )
         self._reg_value: Callable[..., int] = lambda: modbus.helper.get_register(
-            address=modbus.val_reg, index=1, unit=0
+            address=modbus.val_reg, index=1, unit=self.hardware.definition.unit
         )[0]
         self.saved_value: Optional[Union[float, int]] = None
 
@@ -156,7 +155,7 @@ class Relay(UnipiFeature):
 
     feature_type = FeatureType.RO
 
-    async def set_state(self, value: bool) -> Optional[ModbusResponse]:
+    async def set_state(self, value: bool):
         """Set state for relay feature.
 
         Parameters
@@ -171,10 +170,12 @@ class Relay(UnipiFeature):
         data: ModbusWriteData = {
             "address": self.val_coil,
             "value": value,
-            "slave": 0,
+            "slave": self.hardware.definition.unit,
         }
-
-        return await check_modbus_call(self.modbus.helper.client.tcp.write_coil, data)
+        if self.hardware.definition.hardware_type == HardwareType.EXTENSION:
+            return await check_modbus_call(self.modbus.helper.client.serial.write_coil, data)
+        else:
+            return await check_modbus_call(self.modbus.helper.client.tcp.write_coil, data)
 
 
 class DigitalOutput(UnipiFeature):
@@ -182,7 +183,7 @@ class DigitalOutput(UnipiFeature):
 
     feature_type = FeatureType.DI
 
-    async def set_state(self, value: bool) -> Optional[ModbusResponse]:
+    async def set_state(self, value: bool):
         """Set state for digital output feature.
 
         Parameters
@@ -197,10 +198,13 @@ class DigitalOutput(UnipiFeature):
         data: ModbusWriteData = {
             "address": self.val_coil,
             "value": value,
-            "slave": 0,
+            "slave": self.hardware.definition.unit,
         }
 
-        return await check_modbus_call(self.modbus.helper.client.tcp.write_coil, data)
+        if self.hardware.definition.hardware_type == HardwareType.EXTENSION:
+            return await check_modbus_call(self.modbus.helper.client.serial.write_coil, data)
+        else:
+            return await check_modbus_call(self.modbus.helper.client.tcp.write_coil, data)
 
 
 class DigitalInput(UnipiFeature):
@@ -210,7 +214,7 @@ class DigitalInput(UnipiFeature):
 class Led(UnipiFeature):
     """Class for the LED feature from the Unipi PLC."""
 
-    async def set_state(self, value: bool) -> Optional[ModbusResponse]:
+    async def set_state(self, value: bool):
         """Set state for LED feature.
 
         Parameters
@@ -225,7 +229,10 @@ class Led(UnipiFeature):
         data: ModbusWriteData = {
             "address": self.val_coil,
             "value": value,
-            "slave": 0,
+            "slave": self.hardware.definition.unit,
         }
 
-        return await check_modbus_call(self.modbus.helper.client.tcp.write_coil, data)
+        if self.hardware.definition.hardware_type == HardwareType.EXTENSION:
+            return await check_modbus_call(self.modbus.helper.client.serial.write_coil, data)
+        else:
+            return await check_modbus_call(self.modbus.helper.client.tcp.write_coil, data)

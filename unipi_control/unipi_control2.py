@@ -5,25 +5,16 @@ import asyncio
 import sys
 from pathlib import Path
 
-from pymodbus.client.tcp import AsyncModbusTcpClient
-from pymodbus.client.serial import AsyncModbusSerialClient
-from typing import List
-from typing import Optional
-from unipi_control.config import Config
-from unipi_control.config import DEFAULT_CONFIG_DIR
-from unipi_control.config import LogPrefix
-
+from pymodbus.client import AsyncModbusTcpClient, AsyncModbusSerialClient
+from typing import List, Optional
+from unipi_control.config import Config, DEFAULT_CONFIG_DIR, LogPrefix
 from unipi_control.config import UNIPI_LOGGER
 from unipi_control.helpers.argparse import init_argparse
-from unipi_control.helpers.exceptions import ConfigError
-from unipi_control.helpers.exceptions import UnexpectedError
+from unipi_control.helpers.exceptions import ConfigError, UnexpectedError
 from unipi_control.modbus.helpers import ModbusClient
-
 from unipi_control.mqtt.helpers import MqttHelper
 from unipi_control.hardware.unipi import Unipi
-
 from unipi_control.version import __version__
-
 
 class UnipiControl:
     """Control Unipi I/O directly with MQTT commands.
@@ -38,7 +29,7 @@ class UnipiControl:
         self.config: Config = config
         self.modbus_client: ModbusClient = modbus_client
         self.unipi: Unipi = Unipi(config=config, modbus_client=modbus_client)
-
+        
     @classmethod
     def parse_args(cls, args: List[str]) -> argparse.Namespace:
         """Initialize argument parser options.
@@ -71,7 +62,13 @@ class UnipiControl:
         await MqttHelper(unipi=self.unipi).run()
 
 
-def main(argv: Optional[List[str]] = None) -> None:
+async def main(argv: Optional[List[str]] = None) -> None:
+#    import debugpy
+#    debugpy.listen(("0.0.0.0", 5678))
+#    print("Waiting for debugger attach...")
+#    debugpy.wait_for_client()
+#    print("Debugger attached")
+    
     """Entrypoint for Unipi Control."""
     if argv is None:
         argv = sys.argv[1:]
@@ -83,22 +80,25 @@ def main(argv: Optional[List[str]] = None) -> None:
         config: Config = Config(config_base_dir=Path(args.config))
         config.logging.init(log=args.log, verbose=args.verbose)
 
-        unipi_control = UnipiControl(
-            config=config,
-            modbus_client=ModbusClient(
-                tcp=AsyncModbusTcpClient(
-                    host=config.modbus_tcp.host,
-                    port=config.modbus_tcp.port,
-                ),
-                serial=AsyncModbusSerialClient(
-                    port=config.modbus_serial.port,
-                    baudrate=config.modbus_serial.baud_rate,
-                    parity=config.modbus_serial.parity,
-                ),
-            ),
-        )
+        async with AsyncModbusTcpClient(
+            host=config.modbus_tcp.host,
+            port=config.modbus_tcp.port,
+        ) as tcp_client, AsyncModbusSerialClient(
+            port=config.modbus_serial.port,
+            baudrate=config.modbus_serial.baud_rate,
+            parity=config.modbus_serial.parity,
+            stopbits=1,
+            timeout=1,
+            bytesize=8
+        ) as serial_client:
+            await tcp_client.connect()
+            await serial_client.connect()
+            unipi_control = UnipiControl(
+                config=config,
+                modbus_client=ModbusClient(tcp=tcp_client, serial=serial_client),
+            )
 
-        asyncio.run(unipi_control.run())
+            await unipi_control.run()
     except ConfigError as error:
         UNIPI_LOGGER.critical("%s %s", LogPrefix.CONFIG, error)
         sys.exit(1)
@@ -112,3 +112,6 @@ def main(argv: Optional[List[str]] = None) -> None:
     finally:
         if unipi_control:
             UNIPI_LOGGER.info("Successfully shutdown the Unipi Control service.")
+
+if __name__ == "__main__":
+    asyncio.run(main())

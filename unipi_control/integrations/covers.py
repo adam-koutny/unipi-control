@@ -44,6 +44,7 @@ class CoverSettings(NamedTuple):
     tilt_change_time: float
     cover_up: str
     cover_down: str
+    unit: str
     cover_up_feature: Union[DigitalOutput, Relay]
     cover_down_feature: Union[DigitalOutput, Relay]
 
@@ -198,7 +199,7 @@ class Cover:
         str:
             Path for MQTT topic.
         """
-        return f"{slugify(self.config.device_info.name)}/{self.settings.object_id}/cover/{self.settings.device_class}"
+        return f"{slugify(self.settings.unit)}/{self.settings.object_id}/cover/{self.settings.device_class}"
 
     @cached_property
     def position_file(self) -> Path:
