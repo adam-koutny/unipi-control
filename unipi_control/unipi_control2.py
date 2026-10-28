@@ -91,8 +91,6 @@ async def main(argv: Optional[List[str]] = None) -> None:
             timeout=1,
             bytesize=8
         ) as serial_client:
-            await tcp_client.connect()
-            await serial_client.connect()
             unipi_control = UnipiControl(
                 config=config,
                 modbus_client=ModbusClient(tcp=tcp_client, serial=serial_client),

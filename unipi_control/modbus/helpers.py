@@ -93,6 +93,9 @@ class ModbusHelper:
 
     async def connect_serial(self, *, reconnect: bool = False) -> None:
         """Connect to Modbus RTU."""
+        if reconnect:
+            # Release the old port handle, otherwise the new connect can't get the exclusive lock.
+            self.client.serial.close()
         await self.client.serial.connect()
 
         if self.client.serial.connected:
