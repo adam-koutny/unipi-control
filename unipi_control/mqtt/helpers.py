@@ -45,6 +45,8 @@ class MqttHelper:
 
     PUBLISH_RUNNING: ClassVar[bool] = True
     SCAN_INTERVAL: ClassVar[float] = 0.02
+    HEALTH_INTERVAL: ClassVar[float] = 30
+    HEALTH_TIMEOUT: ClassVar[float] = 90
 
     subscribe_feature_types: ClassVar[List[FeatureType]] = [
         FeatureType.DI,
@@ -76,39 +78,44 @@ class MqttHelper:
         self.covers: CoverMap = CoverMap(self.config, self.unipi.features)
         self.covers.init()
 
+        self._health_topic: str = f"{slugify(self.config.device_info.name)}/health"
+        self._health_received: float = time.monotonic()
+
     async def run(self) -> None:
         """Connect/reconnect to MQTT broker."""
         mqtt_client_id: str = f"{slugify(self.config.device_info.name)}-{uuid.uuid4()}"
         UNIPI_LOGGER.info("%s Client ID: %s", LogPrefix.MQTT, mqtt_client_id)
 
-        mqtt_client = MqttClient(
-            self.config.mqtt.host,
-            port=self.config.mqtt.port,
-            username=self.config.mqtt.username,
-            password=self.config.mqtt.password,
-            client_id=mqtt_client_id,
-            keepalive=self.config.mqtt.keepalive,
-        )
-
         reconnect_interval: int = self.config.mqtt.reconnect_interval
         retry_limit: Optional[int] = self.config.mqtt.retry_limit
         retry_reconnect: int = 0
-        discovery_initialized: bool = False
 
         while self.MQTT_RUNNING:
             tasks: Set[Task] = set()
+            # A fresh client per connection: reusing one after a disconnect left the
+            # subscriptions silently dead (publishing kept working, commands were ignored).
+            mqtt_client = MqttClient(
+                self.config.mqtt.host,
+                port=self.config.mqtt.port,
+                username=self.config.mqtt.username,
+                password=self.config.mqtt.password,
+                client_id=mqtt_client_id,
+                keepalive=self.config.mqtt.keepalive,
+            )
 
             try:
                 async with mqtt_client:
                     UNIPI_LOGGER.info(
                         "%s Connected to %s:%s", LogPrefix.MQTT, self.config.mqtt.host, self.config.mqtt.port
                     )
+                    retry_reconnect = 0
 
-                    if self.config.homeassistant.enabled and not discovery_initialized:
+                    if self.config.homeassistant.enabled:
                         UNIPI_LOGGER.info("%s Initialize Home Assistant discovery", LogPrefix.MQTT)
                         await self.discovery(client=mqtt_client)
-                        discovery_initialized = True
 
+                    self._health_received = time.monotonic()
+                    tasks.add(asyncio.create_task(self.health_check(client=mqtt_client)))
                     tasks.add(asyncio.create_task(self.subscribe(client=mqtt_client)))
                     tasks.add(
                         asyncio.create_task(
@@ -153,18 +160,40 @@ class MqttHelper:
                     raise UnexpectedError(msg) from error
 
                 await asyncio.sleep(reconnect_interval)
-            else:
-                retry_reconnect = 0
+            finally:
+                # Tasks of a dead connection must not outlive it (they kept polling Modbus twice).
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def health_check(self, client: MqttClient) -> None:
+        """Publish to our own health topic and exit when it stops coming back.
+
+        Incoming commands once stopped being processed after broker restarts while
+        publishing kept working, and only a service restart helped. Exiting lets
+        systemd restart the service with a clean state.
+        """
+        while True:
+            await client.publish(topic=self._health_topic, payload=str(int(time.time())), qos=0)
+            await asyncio.sleep(self.HEALTH_INTERVAL)
+
+            if time.monotonic() - self._health_received > self.HEALTH_TIMEOUT:
+                msg: str = f"{LogPrefix.MQTT} No message on {self._health_topic} for {self.HEALTH_TIMEOUT}s, restarting."
+                raise UnexpectedError(msg)
 
     async def subscribe(self, client: MqttClient) -> None:
         """Subscribe feature topics to MQTT."""
-        
+
         topics = set([f"{slugify(unit.config.device_info.name)}/#" for unit in self.unipi.unipi_boards])
         topics_with_qos = [(topic, 0) for topic in topics]
         async with client.messages() as messages:
             await client.subscribe(topics_with_qos)
 
             async for message in messages:
+                if message.topic.matches(self._health_topic):
+                    self._health_received = time.monotonic()
+                    continue
+
                 for unit in self.unipi.unipi_boards:
                     for feature in unit.features.by_feature_types(self.subscribe_feature_types):
                         topic: str = f"{feature.topic}/set"
@@ -231,4 +260,10 @@ class MqttHelper:
                 elif isinstance(feature, (DigitalOutput, Relay)):
                     await HassSwitchesDiscovery(unipi_board=unit, client=client).publish(feature)
 
-            await HassCoversDiscovery(covers=self.covers, unipi_board=unit, client=client).publish()
+        # Covers run on the main board relays; publishing them per board created duplicates.
+        main_board = next(
+            unit
+            for unit in self.unipi.unipi_boards
+            if slugify(unit.config.device_info.name) == slugify(self.config.device_info.name)
+        )
+        await HassCoversDiscovery(covers=self.covers, unipi_board=main_board, client=client).publish()
